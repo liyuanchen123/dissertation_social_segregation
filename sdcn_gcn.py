@@ -4,8 +4,8 @@ import random
 import os
 import numpy as np
 from sklearn.cluster import KMeans
-# from sklearn.metrics.cluster import normalized_mutual_info_score as nmi_score
-# from sklearn.metrics import adjusted_rand_score as ari_score
+from sklearn.metrics.cluster import normalized_mutual_info_score as nmi_score
+from sklearn.metrics import adjusted_rand_score as ari_score
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,13 +15,11 @@ from torch.utils.data import DataLoader
 from torch.nn import Linear
 from data_graph import load_data, load_graph
 from GNN import GNNLayer
+from sklearn.metrics import silhouette_score
 # from evaluation import eva
 from collections import Counter
+import sys
 
-
-# torch.cuda.set_device(1)
-
-# Theses are the two models, AE and SDCN 
 
 class AE(nn.Module):
 
@@ -87,15 +85,16 @@ class SDCN(nn.Module):
     def forward(self, x, adj):
         # DNN Module
         x_bar, tra1, tra2, tra3, z = self.ae(x)
-        
-        sigma = 0.5
+        # x_bar, tra1, tra2, tra3, z = [0,0,0,0,0]
+
+        sigma = 0
 
         # GCN Module
         h = self.gnn_1(x, adj)
         h = self.gnn_2((1-sigma)*h + sigma*tra1, adj)
         h = self.gnn_3((1-sigma)*h + sigma*tra2, adj)
-        h = self.gnn_4((1-sigma)*h + sigma*tra3, adj)
-        h = self.gnn_5((1-sigma)*h + sigma*z, adj, active=False)
+        h1 = self.gnn_4((1-sigma)*h + sigma*tra3, adj)
+        h = self.gnn_5((1-sigma)*h1 + sigma*z, adj, active=False)
         predict = F.softmax(h, dim=1)
 
         # Dual Self-supervised Module
@@ -103,26 +102,26 @@ class SDCN(nn.Module):
         q = q.pow((self.v + 1.0) / 2.0)
         q = (q.t() / torch.sum(q, 1)).t()
 
-        return x_bar, q, predict, z
+        return x_bar, q, predict, z, h1
 
 
 def target_distribution(q):
     weight = q**2 / q.sum(0)
     return (weight.t() / weight.sum(1)).t()
 
-# training 
+# training
 def train_sdcn(dataset):
     model = SDCN(500, 500, 2000, 2000, 500, 500,
                 n_input=args.n_input,
                 n_z=args.n_z,
                 n_clusters=args.n_clusters,
                 v=1.0).to(device)
-    print(model)
+    # print(model)
 
     optimizer = Adam(model.parameters(), lr=args.lr)
 
-    # load KNN Graph to adj
-    adj = load_graph(r'C:\UCL\Dissertation\code\adj21.pt')
+    # KNN Graph
+    adj = load_graph(r'C:\UCL\Dissertation\code\adj22.pt')
     adj = adj.cuda()
 
     # cluster parameter initiate
@@ -131,8 +130,8 @@ def train_sdcn(dataset):
     with torch.no_grad():
         _, _, _, _, z = model.ae(data)
 
-    kmeans = KMeans(n_clusters=args.n_clusters, n_init=20) 
-    y_pred = kmeans.fit_predict(z.data.cpu().numpy()) # AE clustering results
+    kmeans = KMeans(n_clusters=args.n_clusters, n_init=20)
+    y_pred = kmeans.fit_predict(z.data.cpu().numpy())
     y_pred_last = y_pred
     model.cluster_layer.data = torch.tensor(kmeans.cluster_centers_).to(device)
     # eva(y, y_pred, 'pae')
@@ -140,7 +139,7 @@ def train_sdcn(dataset):
     for epoch in range(200):
         if epoch % 10 == 0:
         # update_interval
-            _, tmp_q, pred, _ = model(data, adj)
+            _, tmp_q, pred, _, gcn_emb = model(data, adj)
             tmp_q = tmp_q.data
             p = target_distribution(tmp_q)
         
@@ -151,7 +150,7 @@ def train_sdcn(dataset):
             # eva(y, res2, str(epoch) + 'Z')
             # eva(y, res3, str(epoch) + 'P')
 
-        x_bar, q, pred, _ = model(data, adj)
+        x_bar, q, pred, _, gcn_emb = model(data, adj)
 
         kl_loss = F.kl_div(q.log(), p, reduction='batchmean')
         ce_loss = F.kl_div(pred.log(), p, reduction='batchmean')
@@ -164,25 +163,26 @@ def train_sdcn(dataset):
         optimizer.step()
     
     # print(pred.shape)
-    ############
-    torch.save(pred.data.cpu().numpy().argmax(1), 'result/allatt21_result6.pt')
-    torch.save(y_pred, 'result/ae_kmeans21_result6.pt')
-    ###########
+    # print(gcn_emb.shape)
+    score = silhouette_score(gcn_emb.cpu().detach().numpy(), pred.data.cpu().numpy().argmax(1), metric='cosine')
+    # score = silhouette_score(data.cpu().numpy(), pred.data.cpu().numpy().argmax(1), metric='euclidean')
+    print(score)
+    # ############
+    # torch.save(pred.data.cpu().numpy().argmax(1), 'result/allatt_result6_gcn.pt')
+    # torch.save(y_pred, 'result/ae_kmeans_result6_gcn.pt')
+    ###########c
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description='train',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    # arguments
-    # notice that usually needs to adjust 
-    # n_culster, n_z, n_input
     parser.add_argument('--name', type=str, default='acm')
     parser.add_argument('--k', type=int, default=3)
     parser.add_argument('--lr', type=float, default=1e-3)
 
     parser.add_argument('--n_clusters', default=6, type=int)
 
-    parser.add_argument('--n_z', default=10, type=int) # the last layer z gcn_emb
+    parser.add_argument('--n_z', default=10, type=int)
     parser.add_argument('--n_input', default=96, type=int)
     parser.add_argument('--pretrain_path', type=str, default='pkl')
     args = parser.parse_args()
@@ -191,10 +191,17 @@ if __name__ == "__main__":
     device = torch.device("cuda" if args.cuda else "cpu")
 
     args.pretrain_path = r'pretrain/ae_pretrain.pkl'
-    args.n_input = 96 # this must be matched to the pretrain AE output size
+    args.n_input = 96
     # args.pretrain_path = 'data/{}.pkl'.format(args.name)
+    dataset = load_data(r'pretrain/att_data.npy')
 
-    dataset = load_data(r'pretrain/att_data.npy') # load attribute data
+    # print(args)
+    # train_sdcn(dataset)
 
-    print(args)
-    train_sdcn(dataset)
+    # using silhouette score to see which cluster n is the best
+    for n in range(2,13):
+        args.n_clusters = n
+        print(args)
+        train_sdcn(dataset)
+
+

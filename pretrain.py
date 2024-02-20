@@ -11,6 +11,7 @@ from torch.optim import Adam, SGD
 from torch.nn import Linear
 from torch.utils.data import Dataset
 from sklearn.cluster import KMeans
+from census_process import *
 # from evaluation import eva
 
 #torch.cuda.set_device(3)
@@ -87,7 +88,16 @@ def pretrain_ae(model, dataset):
             kmeans = KMeans(n_clusters=4, n_init=20).fit(z.data.cpu().numpy())
             # eva(y, kmeans.labels_, epoch)
 
-        torch.save(model.state_dict(), 'att.pkl')
+        torch.save(model.state_dict(), 'pretrain/ae_pretrain_gcn.pkl')
+
+
+# x, n_input = concat_df('data/census21_lon_lsoa/')
+
+x = np.load('pretrain/att_data.npy')
+n_input = x.shape[1]
+
+# x = np.eye(4994)
+# n_input = 4994
 
 model = AE(
         n_enc_1=500,
@@ -96,27 +106,10 @@ model = AE(
         n_dec_1=2000,
         n_dec_2=500,
         n_dec_3=500,
-        n_input=20,
+        n_input=n_input,
         n_z=10,).cuda()
 
-# x = np.loadtxt(r'SDCN\data\dblp.txt', dtype=float)
-# y = np.loadtxt('dblp_label.txt', dtype=int)
-def normalize(mx):
-    """Row-normalize sparse matrix"""
-    rowsum = np.array(mx.sum(1))
-    r_inv = np.float_power(rowsum, -1).flatten()
-    r_inv[np.isinf(r_inv)] = 0.
-    r_mat_inv = sp.diags(r_inv)
-    mx = r_mat_inv.dot(mx)
-    return mx
 
-attdf = pd.read_csv(r'C:\UCL\Dissertation\code\data\census21_lon_lsoa\lon_lsoa_ethnicity.csv')
-attdf = attdf.pivot(index = 'Lower layer Super Output Areas Code', 
-            columns = 'Ethnic group (20 categories) Code',
-            values='Observation')
-attdf.reset_index(inplace=True,drop=True)
-x = np.array(attdf)
-x = normalize(x)
 
 dataset = LoadDataset(x)
 pretrain_ae(model, dataset)

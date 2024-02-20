@@ -11,15 +11,11 @@ from torch.utils.data import Dataset
 
 
 class load_data(Dataset):
-    def __init__(self, dataset):
-        
-        # attdf = pd.read_csv(r'C:\UCL\Dissertation\code\data\census21_lon_lsoa\lon_lsoa_ethnicity.csv')
-        # attdf = attdf.pivot(index = 'Lower layer Super Output Areas Code', 
-        #             columns = 'Ethnic group (20 categories) Code',
-        #             values='Observation')
-        # attdf.reset_index(inplace=True,drop=True)
-        self.x = np.load(r'C:\UCL\Dissertation\code\att.npy')
-        # self.x = np.loadtxt('data/{}.txt'.format(dataset), dtype=float)
+    def __init__(self, datapath):
+        self.x = np.load(datapath)
+        # self.x = np.ones((4994,1))
+        # self.x = np.eye(4994)
+        # self.x = np.sloadtxt('data/{}.txt'.format(dataset), dtype=float)
         # self.y = np.loadtxt('data/{}_label.txt'.format(dataset), dtype=int)
 
     def __len__(self):
@@ -32,35 +28,37 @@ class load_data(Dataset):
                
 
 
+def build_graph(datapath):
+    datadf = pd.read_pickle(datapath)
+    datadf = pd.DataFrame(datadf)
 
-datadf = pd.read_pickle(r'C:\UCL\Dissertation\code\data\trajectories\2020_0203_0209.pkl')
-datadf = pd.DataFrame(datadf)
+    lsoalist = np.unique(np.array(datadf.fillna('0'))).tolist()
+    lsoalist.remove('0')
+    voc_size = len(lsoalist)
 
-lsoalist = np.unique(np.array(datadf.fillna('0'))).tolist()
-lsoalist.remove('0')
-voc_size = len(lsoalist)
-
-# lsoalist = u
-lsoadict = {w:i for i,w in enumerate(lsoalist)}
+    # lsoalist = u
+    lsoadict = {w:i for i,w in enumerate(lsoalist)}
 
 
 
-pairs = []
-for _, sequence in datadf.iterrows():
-    sequence.dropna(inplace=True)
-    sequence = sequence.tolist()
-    for i in range(len(sequence)-1):
-        # for each window
-        pairs.append([sequence[i], sequence[i+1]])
+    pairs = []
+    for _, sequence in datadf.iterrows():
+        sequence.dropna(inplace=True)
+        sequence = sequence.tolist()
+        for i in range(len(sequence)-1):
+            # for each window
+            pairs.append([sequence[i], sequence[i+1]])
 
-adj = [[0]* len(lsoalist) for _ in range(len(lsoalist))] # shape: 4994 x 4994
-# w = 0
-for i, j in pairs:
-    k = lsoadict[i]
-    p = lsoadict[j]
-    adj[k][p] += 1
-    adj[p][k] += 1
-    adj[k][k] = 1
+    adj = [[0]* len(lsoalist) for _ in range(len(lsoalist))] # shape: 4994 x 4994
+    # w = 0
+    for i, j in pairs:
+        k = lsoadict[i]
+        p = lsoadict[j]
+        adj[k][p] += 1
+        adj[p][k] += 1
+        adj[k][k] = 1
+
+    return adj
 
 def normalize(mx):
     """Row-normalize sparse matrix"""
@@ -80,11 +78,15 @@ def sparse_mx_to_torch_sparse_tensor(sparse_mx):
     shape = torch.Size(sparse_mx.shape)
     return torch.sparse.FloatTensor(indices, values, shape)
 
-adj = normalize(np.array(adj))
-adj = coo_matrix(adj)
-adj = sparse_mx_to_torch_sparse_tensor(adj)
-torch.save(adj, "adj.pt")
 # sns.heatmap(adj, cmap='RdBu')
-def load_graph():
-    return torch.load(r'C:\UCL\Dissertation\code\adj.pt')
+def load_graph(path):
+    return torch.load(path)
 
+if __name__ == '__main__':
+    adj = build_graph(r'data\trajectories\2022_0207_0213.pkl')
+
+    np.save('adj22_unnorm.npy',adj)
+    adj = normalize(np.array(adj))
+    adj = coo_matrix(adj)
+    adj = sparse_mx_to_torch_sparse_tensor(adj)
+    torch.save(adj, "adj22.pt")
